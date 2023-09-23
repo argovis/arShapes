@@ -68,28 +68,35 @@ def transform_facing_and_position(currentFacing, change):
 
 def choose_move(label, map, current_iLat, current_iLon, currentFacing):
     # A B C D are top left, top right, bottom left, bottom right cells around current vertex, oriented to true north
-    A_iLat = max(current_iLat - 1, 0)
-    A_iLon = (current_iLon - 1)%len(map[0])
-    A = map[A_iLat][A_iLon] == label
-    print(f'A, {A_iLat}, {A_iLon}')
+    A_iLat = current_iLat - 1
+    if A_iLat < 0:
+        A = False
+    else:
+        A_iLon = (current_iLon - 1)%len(map[0])
+        A = map[A_iLat][A_iLon] == label
 
-    B_iLat = max(current_iLat - 1, 0)
-    B_iLon = current_iLon
-    B = map[B_iLat][B_iLon] == label
-    print(f'B, {B_iLat}, {B_iLon}')
+    B_iLat = current_iLat - 1
+    if B_iLat < 0:
+        B = False
+    else:
+        B_iLon = current_iLon
+        B = map[B_iLat][B_iLon] == label
 
     C_iLat = current_iLat
     C_iLon = (current_iLon - 1)%len(map[0])
-    C = map[C_iLat][C_iLon] == label
-    print(f'C, {C_iLat}, {C_iLon}')
+    if C_iLat < len(map):
+        C = map[C_iLat][C_iLon] == label
+    else:
+        C = False
 
     D_iLat = current_iLat
     D_iLon = current_iLon
-    D = map[D_iLat][D_iLon] == label
-    print(f'D, {D_iLat}, {D_iLon}')
+    if D_iLat < len(map):
+        D = map[D_iLat][D_iLon] == label
+    else:
+        D = False
 
     # transform A B C D to match current facing
-    print(A, B, C, D)
     if currentFacing == 'N':
         pass
     elif currentFacing == 'E':
@@ -111,7 +118,6 @@ def choose_move(label, map, current_iLat, current_iLon, currentFacing):
         C = D
         D = B
         B = X
-    print(A, B, C, D)
 
     # determine new center vertex and facing based on A B C D
     if C and not A and not B and not D:
@@ -138,7 +144,7 @@ def choose_move(label, map, current_iLat, current_iLon, currentFacing):
 nlon = 8 # number of grid steps in longitude
 
 # toy [lat][lon] grid for a single timestamp direct from the netcdf
-a = [[0, 0, 0, 0, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0,0,0,1,1,0,1,0],[0,0,0,0,0,1,1,0],[0,0,1,1,0,0,0,0],[0,0,1,1,0,0,0,0],[0,0,0,0,0,0,0,0]]
+a = [[1, 1, 1, 1, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0,0,0,1,1,0,1,0],[0,0,0,0,0,1,1,0],[0,0,1,1,0,0,0,0],[1,0,1,1,0,0,0,1],[1,1,1,1,0,0,1,1]]
 
 # label the clusters and make periodic on longitude boundary
 map = scipy.ndimage.label(a, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
@@ -148,7 +154,6 @@ for y in range(map.shape[0]):
 print(map)
 # get distinct labels
 labels = numpy.unique(map)
-print(labels)
 for label in labels:
     if label == 0:
         continue
@@ -157,15 +162,11 @@ for label in labels:
         cells = numpy.where(map == label)
         vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
         facing = 'E'
-        print(f'starting {vertexes}, facing {facing}')
         while not numpy.array_equal(vertexes[0], vertexes[-1]):
             # determine which pattern we're in as a function of present vertex and direction
             # make the appropriate move to generate nextvertex, and append it to vertexes
-            print('---------------')
-            print(facing, vertexes[-1])
             facing, delta_iLat, delta_iLon = choose_move(label, map, vertexes[-1][0], vertexes[-1][1], facing)
-            vertexes.append([vertexes[-1][0]+delta_iLat, vertexes[-1][1]+delta_iLon])
+            vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
         print(label, vertexes)
 
 
-print(-1%10)
