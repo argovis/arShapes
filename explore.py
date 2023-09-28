@@ -1,4 +1,4 @@
-import xarray, numpy, scipy, sys
+import xarray, numpy, scipy, sys, datetime
 from pymongo import MongoClient
 from collections import defaultdict
 
@@ -7,39 +7,8 @@ db = client.argo
 
 xar = xarray.open_dataset('Rutz_ARCatalog_MERRA2_2000.nc')
 
-ntim = 0
-nlon = 0
-nlat = 0
-
-#print(xar['cal_year'][ntim].to_dict()['data'], xar['cal_mon'][ntim].to_dict()['data'], xar['cal_day'][ntim].to_dict()['data'], xar['cal_hour'][ntim].to_dict()['data'])
-#print(xar['longitude'].to_dict()['data'], xar['latitude'].to_dict()['data'])
-#print(xar['ARs'][ntim][nlat][nlon].to_dict()['data'])
-#print(xar['IVT'][ntim][nlat][nlon].to_dict()['data'])
-
-print(numpy.unique(xar['ARs'][ntim].to_dict()['data']))
-
-#print(len(xar['longitude'].to_dict()['data']))
-#print(len(xar['latitude'].to_dict()['data']))
-
-ars = xar['ARs'][ntim].to_numpy()
-ars = scipy.ndimage.label(ars, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
-#print(ars)
-#print(ars.shape)
-#print(ars[360][575])
-
-label_image = scipy.ndimage.label(ars, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
-for y in range(label_image.shape[0]):
-    if label_image[y, 0] > 0 and label_image[y, -1] > 0:
-        label_image[label_image == label_image[y, -1]] = label_image[y, 0]
-#print(label_image)
-#print(numpy.unique(label_image))
-#print((label_image == 1).nonzero())
-#print('xxxx')
 numpy.set_printoptions(threshold=sys.maxsize)
-numpy.set_printoptions(edgeitems=30, linewidth=100000, formatter=dict(float=lambda x: "%.3g" % x))
-print(label_image[30:70, 10:82])
-
-#-------------------------------------
+numpy.set_printoptions(linewidth=200)
 
 # helper functions
 def transform_facing_and_position(currentFacing, change):
@@ -162,100 +131,168 @@ def list_duplicates(seq):
 def loopsort(elt):
     return elt[1][1] - elt[1][0]
 
-# toy [lat][lon] grid for a single timestamp direct from the netcdf
-#a = [[1, 1, 1, 1, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0, 0, 1, 1, 0, 0, 0, 0],[0,0,0,1,1,0,1,0],[0,0,0,0,0,1,1,0],[0,0,1,1,0,0,0,0],[1,0,1,1,0,0,0,1],[1,1,1,1,0,0,1,1]]
-#a = [[0,0,0,0,0,0,0,0],[0,0,0,0,0,0,0,0],[0,0,1,1,1,0,0,0],[0,0,1,0,1,0,0,0],[0,0,1,0,1,0,0,0],[0,0,1,1,1,0,0,0],[0,0,0,0,0,0,1,1],[0,0,0,0,0,0,1,1]]
-a = label_image
+def label_features(image):
+    # given a 2D grid image[latitude][longitude] labeling features with 1 and voids with 0,
+    # label distinct isolated features with a periodic boundary on the inner index 
+    labeled_map = scipy.ndimage.label(image, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
+    for y in range(labeled_map.shape[0]):
+        if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
+            labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
 
-# some constants
-nlon = len(a[0])
+    return labeled_map
+
+def trace_shape(labeled_map, label):
+    # trace the shape labeled with label in labeled_map
+
+    nlon = len(labeled_map[0])
+
+    # find a northern edge, and take its two top vertexes as the first two boundary vertexes, in order
+    cells = numpy.where(labeled_map == label)
+    print(cells)
+    vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
+    facing = 'E'
+    nrun = 0
+    while not numpy.array_equal(vertexes[0], vertexes[-1]):
+        # determine which pattern we're in as a function of present vertex and direction
+        # make the appropriate move to generate nextvertex, and append it to vertexes
+        oldfacing = facing
+        facing, delta_iLat, delta_iLon = choose_move(label, labeled_map, vertexes[-1][0], vertexes[-1][1], facing)
+        # straight runs only need the first and last point
+        if facing == oldfacing:
+            nrun += 1
+        elif nrun > 2:
+            del vertexes[-1*(nrun-2):-1]
+            nrun = 0
+        vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
+
+    return vertexes
+
+def convert_hour(time):
+
+    hh = int(time)
+    mm = (time*60) % 60
+    ss = (time*3600) % 60
+
+    return "%d:%02d.%02d" % (hh, mm, ss)
+
+# unpack the netcdf
 longitudes = xar['longitude'].to_dict()['data']
 latitudes = xar['latitude'].to_dict()['data']
+print(len(latitudes))
+cal_mons = xar['cal_mon'].to_dict()['data']
+cal_days = xar['cal_day'].to_dict()['data']
+cal_years = xar['cal_year'].to_dict()['data']
+cal_hours = xar['cal_hour'].to_dict()['data']
+ars = xar['ARs']
+ivts = xar['IVT']
 
-# label the clusters and make periodic on longitude boundary
-map = scipy.ndimage.label(a, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
-for y in range(map.shape[0]):
-    if map[y, 0] > 0 and map[y, -1] > 0:
-        map[map == map[y, -1]] = map[y, 0]
-#print(map)
-# get distinct labels
-labels = numpy.unique(map)
-# identify blobs
-ARs = []
-for label in labels:
-    if label == 0:
-        continue
-    else:
-        # find a northern edge, and take its two top vertexes as the first two boundary vertexes, in order
-        cells = numpy.where(map == label)
-        vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
-        facing = 'E'
-        while not numpy.array_equal(vertexes[0], vertexes[-1]):
-            # determine which pattern we're in as a function of present vertex and direction
-            # make the appropriate move to generate nextvertex, and append it to vertexes
-            facing, delta_iLat, delta_iLon = choose_move(label, map, vertexes[-1][0], vertexes[-1][1], facing)
-            vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
-        #print(vertexes)
-        # ARs with multiple regions joined only by a single vertex must be written as a list of polygons to be indexed in mongo
-        dupes = list(list_duplicates(vertexes))
-        dupes.sort(key=loopsort)
-        shapes = []
-        while len(dupes) > 1:
-            shapes.append([vertexes[dupes[0][1][0] : dupes[0][1][1]+1]])
-            del vertexes[dupes[0][1][0] : dupes[0][1][1]+1]
+#for timestep in range(len(cal_years)):
+for timestep in [1618]:
+    cal_mon = cal_mons[timestep]
+    cal_day = cal_days[timestep]
+    cal_year = cal_years[timestep]
+    cal_hour = cal_hours[timestep]
+    hhmmss = convert_hour(cal_hour)
+    ar = ars[timestep].to_numpy()
+    ivt = ivts[timestep].to_numpy()
+
+    # label the clusters and make periodic on longitude boundary
+    labeled_map = label_features(ar)
+
+    # get distinct labels
+    labels = numpy.unique(labeled_map)
+
+    # identify blobs
+    ARs = []
+    # for label in labels:
+    for label in [21]:
+        flags = set(())
+        #if label == 0:
+        if label == 0:
+            continue
+        else:
+            cells = numpy.where(labeled_map == label)
+            lats = [latitudes[x] for x in cells[0]]
+            lons = [longitudes[x] for x in cells[1]]
+            vapors = [ [ivt[cells[0][i]][cells[1][i]]] for i in range(len(cells[0])) ]
+            raster = list(zip(lons, lats, vapors))
+            
+            print(min(cells[0]), max(cells[0]))
+            print(min(cells[1]), max(cells[1]))
+            #print(labeled_map.shape)
+            #if timestep == 0 and label == 11:
+            if timestep == 1618 and label == 21:
+                print(labeled_map[267:,450:514])
+
+            # flag ARs that touch the poles
+            vertexes = trace_shape(labeled_map, label)
+            l = [x[0] for x in vertexes]
+            if 0 in l:
+                flags.add('south_pole')
+            if len(latitudes)-1 in l:
+                flags.add('north_pole')
+            # flag ARs that touch the dateline
+            l = [x[1] for x in vertexes]
+            if 0 in l or len(longitudes)-1 in l:
+                flags.add('dateline')
+
+            # ARs with multiple regions joined only by a single vertex must be written as a list of polygons to be indexed in mongo
             dupes = list(list_duplicates(vertexes))
             dupes.sort(key=loopsort)
-        shapes.append([vertexes])
+            shapes = []
+            while len(dupes) > 1:
+                shapes.append([vertexes[dupes[0][1][0] : dupes[0][1][1]+1]])
+                del vertexes[dupes[0][1][0] : dupes[0][1][1]+1]
+                vertexes.insert(dupes[0][1][0], [int(x) for x in dupes[0][0].strip('[]').split(', ')])
+                dupes = list(list_duplicates(vertexes))
+                dupes.sort(key=loopsort)
+            shapes.append([vertexes])
 
-        ARs.append({"type": "MultiPolygon", "coordinates": shapes})
+            ARs.append({"coordinates": shapes, "raster": raster, "label": label, "flags": flags})
 
-print(ARs)
+    # invert the map and do it over again, looking for holes
+    b = [[1-y for y in x] for x in ar]
 
+    # label the holes, drop the most common since that's just the open ocean, and make periodic on longitude boundary
+    holes = scipy.ndimage.label(b, structure=[[0,1,0],[1,1,1],[0,1,0]])[0] # no diagonal contiguity == don't need to pick apart nested loops
+    values, counts = numpy.unique(holes, return_counts=True)
+    most_common = values[numpy.argmax(counts)]
+    holes[holes == most_common] = 0
+    for y in range(holes.shape[0]):
+        if holes[y, 0] > 0 and holes[y, -1] > 0:
+            holes[holes == holes[y, -1]] = holes[y, 0]
 
-# # invert the map and do it over again, looking for holes
-# b = [[1-y for y in x] for x in a]
+    # get distinct labels
+    labels = numpy.unique(holes)
+    h = []
+    # identify blobs
+    for label in labels:
+        if label == 0:
+            continue
+        else:
+            vertexes = trace_shape(holes, label)
 
-# # label the holes, drop the most common since that's just the open ocean, and make periodic on longitude boundary
-# holes = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
-# values, counts = numpy.unique(holes, return_counts=True)
-# most_common = values[numpy.argmax(counts)]
-# holes[holes == most_common] = 0
-# for y in range(holes.shape[0]):
-#     if holes[y, 0] > 0 and holes[y, -1] > 0:
-#         holes[holes == holes[y, -1]] = holes[y, 0]
-# #print(holes)
-# # get distinct labels
-# labels = numpy.unique(holes)
-# h = []
-# # identify blobs
-# for label in labels:
-#     if label == 0:
-#         continue
-#     else:
-#         # find a northern edge, and take its two top vertexes as the first two boundary vertexes, in order
-#         cells = numpy.where(holes == label)
-#         vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
-#         facing = 'E'
-#         while not numpy.array_equal(vertexes[0], vertexes[-1]):
-#             # determine which pattern we're in as a function of present vertex and direction
-#             # make the appropriate move to generate nextvertex, and append it to vertexes
-#             facing, delta_iLat, delta_iLon = choose_move(label, holes, vertexes[-1][0], vertexes[-1][1], facing)
-#             vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
-#         # identify which AR this hole belongs to
-#         hole_min_lat = min([val[0] for val in vertexes])
-#         hole_max_lat = max([val[0] for val in vertexes])
-#         hole_min_lon = min([val[1] for val in vertexes])
-#         hole_max_lon = max([val[1] for val in vertexes])
-#         for i, AR in enumerate(ARs):
-#             AR_min_lat = min([val[0] for val in AR['coordinates'][0][0][0]])
-#             AR_max_lat = max([val[0] for val in AR['coordinates'][0][0][0]])
-#             AR_min_lon = min([val[1] for val in AR['coordinates'][0][0][0]])
-#             AR_max_lon = max([val[1] for val in AR['coordinates'][0][0][0]])
-#             if AR_min_lat < hole_min_lat and AR_max_lat > hole_max_lat and AR_min_lon < hole_min_lon and AR_max_lon > hole_max_lon:
-#                 ARs[i]['coordinates'][0][0].append()
+            # identify which AR this hole belongs to
+            hole_min_lat = min([val[0] for val in vertexes])
+            hole_max_lat = max([val[0] for val in vertexes])
+            hole_min_lon = min([val[1] for val in vertexes])
+            hole_max_lon = max([val[1] for val in vertexes])
+            for i, AR in enumerate(ARs):
+                for j, loop in enumerate(AR['coordinates']):
+                    AR_min_lat = min([val[0] for val in loop[0]])
+                    AR_max_lat = max([val[0] for val in loop[0]])
+                    AR_min_lon = min([val[1] for val in loop[0]])
+                    AR_max_lon = max([val[1] for val in loop[0]])
+                    if AR_min_lat < hole_min_lat and AR_max_lat > hole_max_lat and AR_min_lon < hole_min_lon and AR_max_lon > hole_max_lon:
+                        ARs[i]['coordinates'][j].append(vertexes)
+                        ARs[i]['flags'].add('holes')
 
-# map indexes back onto real locations
-# ARs = [ {"type": "MultiPolygon", "coordinates": [[[index2coords(index, longitudes, latitudes) for index in poly] for poly in AR["coordinates"][0]]]} for AR in ARs]
+    # map indexes back onto real locations
+    ARs = [ {   '_id': f'{cal_year}{cal_mon}{cal_day}{cal_hour}_{AR["label"]}' , 
+                'timestamp': datetime.datetime(year=int(cal_year), month=int(cal_mon), day=int(cal_day), hour=int(cal_hour), minute=int((cal_hour*60) % 60), second=int((cal_hour*3600) % 60) ), 
+                'raster': AR['raster'], 
+                'flags': list(AR['flags']),
+                'geolocation': {"type": "MultiPolygon", "coordinates": [[[index2coords(index, longitudes, latitudes) for index in poly] for poly in loop] for loop in AR['coordinates']]}
+            } for AR in ARs]
 
-#for AR in ARs:
-#    db.blobs.insert_one({'geolocation': AR})
+    db.blobs.insert_many(ARs)
