@@ -8,7 +8,7 @@ db = client.argo
 xar = xarray.open_dataset('Rutz_ARCatalog_MERRA2_2000.nc')
 
 numpy.set_printoptions(threshold=sys.maxsize)
-numpy.set_printoptions(linewidth=200)
+numpy.set_printoptions(linewidth=200000)
 
 # helper functions
 def transform_facing_and_position(currentFacing, change):
@@ -46,7 +46,7 @@ def transform_facing_and_position(currentFacing, change):
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
 def choose_move(label, map, current_iLat, current_iLon, currentFacing):
-    # A B C D are top left, top right, bottom left, bottom right cells around current vertex, oriented to true north
+    # A B C D are top left, top right, bottom left, bottom right cells around current vertex, oriented upwards (ie to smaller first index) in the matrix
     A_iLat = current_iLat - 1
     if A_iLat < 0:
         A = False
@@ -75,7 +75,7 @@ def choose_move(label, map, current_iLat, current_iLon, currentFacing):
     else:
         D = False
 
-    # transform A B C D to match current facing
+    # transform A B C D to match current facing (N to smaller first index, W to smaller second index)
     if currentFacing == 'N':
         pass
     elif currentFacing == 'E':
@@ -120,7 +120,7 @@ def choose_move(label, map, current_iLat, current_iLon, currentFacing):
 
 def index2coords(index, longitudes, latitudes):
     # index [lat_idx, lon_idx]; return [lon, lat]
-    return [longitudes[index[1]], latitudes[index[0]]]
+    return [longitudes[index[1]], min(-90.0 + 0.5*index[0], 90) ] # half degree bins -90 to 90, associate value with left edge; values in the 90 bin are by definition right on the left edge of the bin, and so are included with the same border as the previous bin
 
 def list_duplicates(seq):
     tally = defaultdict(list)
@@ -148,7 +148,6 @@ def trace_shape(labeled_map, label):
 
     # find a northern edge, and take its two top vertexes as the first two boundary vertexes, in order
     cells = numpy.where(labeled_map == label)
-    print(cells)
     vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
     facing = 'E'
     nrun = 0
@@ -157,12 +156,12 @@ def trace_shape(labeled_map, label):
         # make the appropriate move to generate nextvertex, and append it to vertexes
         oldfacing = facing
         facing, delta_iLat, delta_iLon = choose_move(label, labeled_map, vertexes[-1][0], vertexes[-1][1], facing)
-        # straight runs only need the first and last point
-        if facing == oldfacing:
-            nrun += 1
-        elif nrun > 2:
-            del vertexes[-1*(nrun-2):-1]
-            nrun = 0
+        # # straight runs only need the first and last point
+        # if facing == oldfacing:
+        #     nrun += 1
+        # elif nrun > 2:
+        #     del vertexes[-1*(nrun-2):-1]
+        #     nrun = 0
         vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
 
     return vertexes
@@ -178,7 +177,6 @@ def convert_hour(time):
 # unpack the netcdf
 longitudes = xar['longitude'].to_dict()['data']
 latitudes = xar['latitude'].to_dict()['data']
-print(len(latitudes))
 cal_mons = xar['cal_mon'].to_dict()['data']
 cal_days = xar['cal_day'].to_dict()['data']
 cal_years = xar['cal_year'].to_dict()['data']
@@ -198,14 +196,15 @@ for timestep in [1618]:
 
     # label the clusters and make periodic on longitude boundary
     labeled_map = label_features(ar)
+    print(labeled_map)
 
     # get distinct labels
     labels = numpy.unique(labeled_map)
 
     # identify blobs
     ARs = []
-    # for label in labels:
-    for label in [21]:
+    for label in labels:
+    #for label in [21]:
         flags = set(())
         #if label == 0:
         if label == 0:
@@ -217,15 +216,17 @@ for timestep in [1618]:
             vapors = [ [ivt[cells[0][i]][cells[1][i]]] for i in range(len(cells[0])) ]
             raster = list(zip(lons, lats, vapors))
             
-            print(min(cells[0]), max(cells[0]))
-            print(min(cells[1]), max(cells[1]))
+            #print(min(cells[0]), max(cells[0]))
+            #print(min(cells[1]), max(cells[1]))
             #print(labeled_map.shape)
             #if timestep == 0 and label == 11:
-            if timestep == 1618 and label == 21:
-                print(labeled_map[267:,450:514])
+            # if timestep == 1618 and label == 21:
+            #     print(labeled_map[267:,450:514])
 
             # flag ARs that touch the poles
+            #print(9999)
             vertexes = trace_shape(labeled_map, label)
+            #print(9999)
             l = [x[0] for x in vertexes]
             if 0 in l:
                 flags.add('south_pole')
@@ -262,6 +263,9 @@ for timestep in [1618]:
         if holes[y, 0] > 0 and holes[y, -1] > 0:
             holes[holes == holes[y, -1]] = holes[y, 0]
 
+    print('-------------------')
+    print(holes)
+
     # get distinct labels
     labels = numpy.unique(holes)
     h = []
@@ -271,21 +275,43 @@ for timestep in [1618]:
             continue
         else:
             vertexes = trace_shape(holes, label)
-
+            placedhole = False
+            print(label)
             # identify which AR this hole belongs to
-            hole_min_lat = min([val[0] for val in vertexes])
-            hole_max_lat = max([val[0] for val in vertexes])
-            hole_min_lon = min([val[1] for val in vertexes])
-            hole_max_lon = max([val[1] for val in vertexes])
             for i, AR in enumerate(ARs):
                 for j, loop in enumerate(AR['coordinates']):
-                    AR_min_lat = min([val[0] for val in loop[0]])
-                    AR_max_lat = max([val[0] for val in loop[0]])
-                    AR_min_lon = min([val[1] for val in loop[0]])
-                    AR_max_lon = max([val[1] for val in loop[0]])
-                    if AR_min_lat < hole_min_lat and AR_max_lat > hole_max_lat and AR_min_lon < hole_min_lon and AR_max_lon > hole_max_lon:
-                        ARs[i]['coordinates'][j].append(vertexes)
-                        ARs[i]['flags'].add('holes')
+                    # identify which loop in this AR the hole might belong to
+                    ## is there a loop bound directly north of the first hole vertex?
+                    northbound = [x for x in loop[0] if x[0] > vertexes[0][0] and x[1] == vertexes[0][1]]
+                    print(AR['label'], northbound)
+                    if len(northbound) == 0:
+                        continue
+                    ## directly south?
+                    southbound = [x for x in loop[0] if x[0] < vertexes[0][0] and x[1] == vertexes[0][1]]
+                    print(AR['label'], southbound)
+                    if len(southbound) == 0:
+                        continue
+                    ARs[i]['coordinates'][j].append(vertexes)
+                    ARs[i]['flags'].add('holes')
+                    placedhole = True
+            if not placedhole:
+                print(f'warning: didnt place hole in timestamp {timestep}, hole label {label}, scanning on vertex {vertexes[0]}')
+
+    # straight runs need only the first and last point
+    for i, AR in enumerate(ARs):
+        for j, loop in enumerate(AR['coordinates']):
+            for k, poly in enumerate(loop):
+                reduced_poly = [poly[0]]
+                for v in range(1,len(poly)-1):
+                    if poly[v][0] == reduced_poly[-1][0] and poly[v][0] == poly[v+1][0]:
+                        continue
+                    elif poly[v][1] == reduced_poly[-1][1] and poly[v][1] == poly[v+1][1]:
+                        continue
+                    else:
+                        reduced_poly.append(poly[v])
+                reduced_poly.append(poly[-1])
+                ARs[i]['coordinates'][j][k] = reduced_poly
+
 
     # map indexes back onto real locations
     ARs = [ {   '_id': f'{cal_year}{cal_mon}{cal_day}{cal_hour}_{AR["label"]}' , 
