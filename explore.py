@@ -156,12 +156,6 @@ def trace_shape(labeled_map, label):
         # make the appropriate move to generate nextvertex, and append it to vertexes
         oldfacing = facing
         facing, delta_iLat, delta_iLon = choose_move(label, labeled_map, vertexes[-1][0], vertexes[-1][1], facing)
-        # # straight runs only need the first and last point
-        # if facing == oldfacing:
-        #     nrun += 1
-        # elif nrun > 2:
-        #     del vertexes[-1*(nrun-2):-1]
-        #     nrun = 0
         vertexes.append([vertexes[-1][0]+delta_iLat, (vertexes[-1][1]+delta_iLon)%nlon])
 
     return vertexes
@@ -185,7 +179,8 @@ ars = xar['ARs']
 ivts = xar['IVT']
 
 #for timestep in range(len(cal_years)):
-for timestep in [1618]:
+for timestep in [795]:
+
     cal_mon = cal_mons[timestep]
     cal_day = cal_days[timestep]
     cal_year = cal_years[timestep]
@@ -193,6 +188,9 @@ for timestep in [1618]:
     hhmmss = convert_hour(cal_hour)
     ar = ars[timestep].to_numpy()
     ivt = ivts[timestep].to_numpy()
+    ar[-1] = numpy.zeros(len(ar[-1])) # last latitude bin is strictly the north pole, doesn't make sense to bin in longitude; suppress
+
+    #print(timestep, f'{cal_year}{cal_mon}{cal_day}{cal_hour}')
 
     # label the clusters and make periodic on longitude boundary
     labeled_map = label_features(ar)
@@ -204,7 +202,7 @@ for timestep in [1618]:
     # identify blobs
     ARs = []
     for label in labels:
-    #for label in [12]:
+    #for label in [20]:
         flags = set(())
         if label == 0:
             continue
@@ -250,7 +248,10 @@ for timestep in [1618]:
     # invert the map and do it over again, looking for holes
     b = [[1-y for y in x] for x in ar]
     ## start by identifying the open ocean, including non-AR points diagonally connected to it, and mask them all out
-    ocean_mask = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0] 
+    ocean_mask = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
+    for y in range(ocean_mask.shape[0]):
+        if ocean_mask[y, 0] > 0 and ocean_mask[y, -1] > 0:
+            ocean_mask[ocean_mask == ocean_mask[y, -1]] = ocean_mask[y, 0]
     values, counts = numpy.unique(ocean_mask, return_counts=True)
     most_common = values[numpy.argmax(counts)]
     ocean_mask[ocean_mask != most_common] = 0
@@ -262,9 +263,16 @@ for timestep in [1618]:
     for y in range(holes.shape[0]):
         if holes[y, 0] > 0 and holes[y, -1] > 0:
             holes[holes == holes[y, -1]] = holes[y, 0]
+    # 'holes' adjacent to the poles arent holes, they're boundaries
+    southholes = numpy.unique(holes[0])
+    for s in southholes:
+        holes[holes==s] = 0
+    northholes = numpy.unique(holes[-1])
+    for n in northholes:
+        holes[holes==n] = 0
 
-    # print('-------------------')
-    # print(holes)
+    #print('-------------------')
+    #print(holes)
 
     # get distinct labels
     labels = numpy.unique(holes)
@@ -276,24 +284,29 @@ for timestep in [1618]:
         else:
             vertexes = trace_shape(holes, label)
             placedhole = False
+            brackets = []
             #print(label)
             # identify which AR this hole belongs to
             for i, AR in enumerate(ARs):
                 for j, loop in enumerate(AR['coordinates']):
                     # identify which loop in this AR the hole might belong to
                     ## is there a loop bound directly north of the first hole vertex?
-                    northbound = [x for x in loop[0] if x[0] > vertexes[0][0] and x[1] == vertexes[0][1]]
+                    northbound = [x[0] for x in loop[0] if x[0] > vertexes[0][0] and x[1] == vertexes[0][1]]
                     #print(AR['label'], northbound)
                     if len(northbound) == 0:
                         continue
                     ## directly south?
-                    southbound = [x for x in loop[0] if x[0] < vertexes[0][0] and x[1] == vertexes[0][1]]
+                    southbound = [x[0] for x in loop[0] if x[0] < vertexes[0][0] and x[1] == vertexes[0][1]]
                     #print(AR['label'], southbound)
                     if len(southbound) == 0:
                         continue
-                    ARs[i]['coordinates'][j].append(vertexes)
-                    ARs[i]['flags'].add('holes')
-                    placedhole = True
+                    brackets.append([i,j,min(northbound) - max(southbound)])
+                    
+            brackets.sort(key=lambda x: x[2])
+            ARs[brackets[0][0]]['coordinates'][brackets[0][1]].append(vertexes)
+            ARs[brackets[0][0]]['flags'].add('holes')
+            placedhole = True
+
             if not placedhole:
                 print(f'warning: didnt place hole in timestamp {timestep}, hole label {label}, scanning on vertex {vertexes[0]}')
                 print([index2coords(index, longitudes, latitudes) for index in vertexes])
@@ -313,7 +326,6 @@ for timestep in [1618]:
                 reduced_poly.append(poly[-1])
                 ARs[i]['coordinates'][j][k] = reduced_poly
 
-
     # map indexes back onto real locations
     ARs = [ {   '_id': f'{cal_year}{cal_mon}{cal_day}{cal_hour}_{AR["label"]}' , 
                 'timestamp': datetime.datetime(year=int(cal_year), month=int(cal_mon), day=int(cal_day), hour=int(cal_hour), minute=int((cal_hour*60) % 60), second=int((cal_hour*3600) % 60) ), 
@@ -321,5 +333,13 @@ for timestep in [1618]:
                 'flags': list(AR['flags']),
                 'geolocation': {"type": "MultiPolygon", "coordinates": [[[index2coords(index, longitudes, latitudes) for index in poly] for poly in loop] for loop in AR['coordinates']]}
             } for AR in ARs]
+
+    # map to [0,360]
+    for i, AR in enumerate(ARs):
+        for j, loop in enumerate(AR['geolocation']['coordinates']):
+            for k, poly in enumerate(loop):
+                for v, vertex in enumerate(poly):
+                    if vertex[0] < 0:
+                        ARs[i]['geolocation']['coordinates'][j][k][v][0] += 360
 
     db.blobs.insert_many(ARs)
