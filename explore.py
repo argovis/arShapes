@@ -179,7 +179,8 @@ ars = xar['ARs']
 ivts = xar['IVT']
 
 #for timestep in range(len(cal_years)):
-for timestep in [795]:
+#for timestep in [795]:
+for timestep in range(400,2928):
 
     cal_mon = cal_mons[timestep]
     cal_day = cal_days[timestep]
@@ -190,14 +191,17 @@ for timestep in [795]:
     ivt = ivts[timestep].to_numpy()
     ar[-1] = numpy.zeros(len(ar[-1])) # last latitude bin is strictly the north pole, doesn't make sense to bin in longitude; suppress
 
-    #print(timestep, f'{cal_year}{cal_mon}{cal_day}{cal_hour}')
+    print(timestep, f'{cal_year}{cal_mon}{cal_day}{cal_hour}')
 
-    # label the clusters and make periodic on longitude boundary
+    # label the ARs and make periodic on longitude boundary
     labeled_map = label_features(ar)
+    # create non-diagonally connected sublabels for each AR that are globally unique
+    sublabel_map = label_features(ar, structure=[[0,1,0],[1,1,1],[0,1,0]])
     #print(labeled_map)
 
-    # get distinct labels
+    # get distinct AR labels
     labels = numpy.unique(labeled_map)
+    sublabels = numpy.unique(sublabel_map)
 
     # identify blobs
     ARs = []
@@ -213,12 +217,13 @@ for timestep in [795]:
             vapors = [ [ivt[cells[0][i]][cells[1][i]]] for i in range(len(cells[0])) ]
             raster = list(zip(lons, lats, vapors))
             
-            # re-label just this region, this time not connecting diagonally so diagonally connected regions make separate loops
+            # generate a loop for every sublabel in this AR
             local_map = ars[timestep].to_numpy()
-            local_map[labeled_map != label] = 0
-            local_label_map = label_features(local_map, [[0,1,0],[1,1,1],[0,1,0]])
-            local_labels = numpy.unique(local_label_map)
-            loops = [[trace_shape(local_label_map, local_label)] for local_label in local_labels if local_label != 0]
+            local_map[labeled_map != label] = 0 # gets rid of other ARs in a the AR binary flag map
+            local_sublabels_map = numpy.copy(sublabel_map)
+            local_sublabels_map[local_map == 0] = 0 # sublabel map only including this AR
+            local_sublabels = [x for x in numpy.unique(local_sublabels_map) if x != 0] # these are the rings that belong as top level objects in this AR
+            loops = [[trace_shape(local_sublabels_map, sublabel)] for sublabel in local_sublabels]
 
             # flag ARs that touch the poles
             l = [vertex[0] for loop in loops for vertexes in loop for vertex in vertexes]
@@ -243,73 +248,121 @@ for timestep in [795]:
             #     dupes.sort(key=loopsort)
             # shapes.append([vertexes])
 
-            ARs.append({"coordinates": loops, "raster": raster, "label": label, "flags": flags})
+            ARs.append({"coordinates": loops, "raster": raster, "label": label, "sublabels": local_sublabels, "flags": flags})
 
-    # invert the map and do it over again, looking for holes
-    b = [[1-y for y in x] for x in ar]
-    ## start by identifying the open ocean, including non-AR points diagonally connected to it, and mask them all out
-    ocean_mask = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
-    for y in range(ocean_mask.shape[0]):
-        if ocean_mask[y, 0] > 0 and ocean_mask[y, -1] > 0:
-            ocean_mask[ocean_mask == ocean_mask[y, -1]] = ocean_mask[y, 0]
-    values, counts = numpy.unique(ocean_mask, return_counts=True)
-    most_common = values[numpy.argmax(counts)]
-    ocean_mask[ocean_mask != most_common] = 0
-    ocean_mask[ocean_mask == most_common] = 1
+    # hole identification
+    for i, AR in enumerate(ARs):
+        for j, sublabel in enumerate(AR['sublabels']): # note loops and local_sublabels correspond by index
+            ## mask off everything that isnt this subregion
+            local_sublabels_map = numpy.copy(sublabel_map)
+            local_sublabels_map[local_sublabels_map != sublabel] = 0 # suppress all other subregions
+            local_sublabels_map[local_sublabels_map == sublabel] = 1 # change to binary flag indicating this lone subregion
+            
+            ## invert
+            b = [[1-y for y in x] for x in local_sublabels_map]
+            
+            ## identify the exterior of the subregion
+            ocean_mask = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
+            if numpy.array_equal(numpy.unique(ocean_mask), [0,1]):
+                # no holes, bail out now
+                continue
+            for y in range(ocean_mask.shape[0]):
+                if ocean_mask[y, 0] > 0 and ocean_mask[y, -1] > 0:
+                    ocean_mask[ocean_mask == ocean_mask[y, -1]] = ocean_mask[y, 0]
+            values, counts = numpy.unique(ocean_mask, return_counts=True)
+            most_common = values[numpy.argmax(counts)]
+            ocean_mask[ocean_mask != most_common] = 0
+            ocean_mask[ocean_mask == most_common] = 1
 
-    # label the holes, mask off the open ocean, and make periodic on longitude boundary
-    holes = scipy.ndimage.label(b, structure=[[0,1,0],[1,1,1],[0,1,0]])[0] # no diagonal contiguity == don't need to pick apart nested loops
-    holes[ocean_mask == 1] = 0
-    for y in range(holes.shape[0]):
-        if holes[y, 0] > 0 and holes[y, -1] > 0:
-            holes[holes == holes[y, -1]] = holes[y, 0]
-    # 'holes' adjacent to the poles arent holes, they're boundaries
-    southholes = numpy.unique(holes[0])
-    for s in southholes:
-        holes[holes==s] = 0
-    northholes = numpy.unique(holes[-1])
-    for n in northholes:
-        holes[holes==n] = 0
+            ## label the holes periodically, mask off exterior
+            holes = scipy.ndimage.label(b, structure=[[0,1,0],[1,1,1],[0,1,0]])[0] # no diagonal contiguity == don't need to pick apart nested loops
+            holes[ocean_mask == 1] = 0
+            for y in range(holes.shape[0]):
+                if holes[y, 0] > 0 and holes[y, -1] > 0:
+                    holes[holes == holes[y, -1]] = holes[y, 0]
+
+            ## 'holes' adjacent to the poles arent holes, they're boundaries
+            southholes = numpy.unique(holes[0])
+            for s in southholes:
+                holes[holes==s] = 0
+            northholes = numpy.unique(holes[-1])
+            for n in northholes:
+                holes[holes==n] = 0
+
+            ## trace boundaries of each hole and add to geojson
+            for h in numpy.unique(holes):
+                if h == 0:
+                    continue
+                else:
+                    vertexes = trace_shape(holes, h)
+                    ARs[i]['coordinates'][j].append(vertexes)
+                    ARs[i]['flags'].add('holes')
+
+    # # invert the map and do it over again, looking for holes
+    # b = [[1-y for y in x] for x in ar]
+    # ## start by identifying the open ocean, including non-AR points diagonally connected to it, and mask them all out
+    # ocean_mask = scipy.ndimage.label(b, structure=[[1,1,1],[1,1,1],[1,1,1]])[0]
+    # for y in range(ocean_mask.shape[0]):
+    #     if ocean_mask[y, 0] > 0 and ocean_mask[y, -1] > 0:
+    #         ocean_mask[ocean_mask == ocean_mask[y, -1]] = ocean_mask[y, 0]
+    # values, counts = numpy.unique(ocean_mask, return_counts=True)
+    # most_common = values[numpy.argmax(counts)]
+    # ocean_mask[ocean_mask != most_common] = 0
+    # ocean_mask[ocean_mask == most_common] = 1
+
+    # # label the holes, mask off the open ocean, and make periodic on longitude boundary
+    # holes = scipy.ndimage.label(b, structure=[[0,1,0],[1,1,1],[0,1,0]])[0] # no diagonal contiguity == don't need to pick apart nested loops
+    # holes[ocean_mask == 1] = 0
+    # for y in range(holes.shape[0]):
+    #     if holes[y, 0] > 0 and holes[y, -1] > 0:
+    #         holes[holes == holes[y, -1]] = holes[y, 0]
+    # # 'holes' adjacent to the poles arent holes, they're boundaries
+    # southholes = numpy.unique(holes[0])
+    # for s in southholes:
+    #     holes[holes==s] = 0
+    # northholes = numpy.unique(holes[-1])
+    # for n in northholes:
+    #     holes[holes==n] = 0
 
     #print('-------------------')
     #print(holes)
 
-    # get distinct labels
-    labels = numpy.unique(holes)
-    h = []
-    # identify blobs
-    for label in labels:
-        if label == 0:
-            continue
-        else:
-            vertexes = trace_shape(holes, label)
-            placedhole = False
-            brackets = []
-            #print(label)
-            # identify which AR this hole belongs to
-            for i, AR in enumerate(ARs):
-                for j, loop in enumerate(AR['coordinates']):
-                    # identify which loop in this AR the hole might belong to
-                    ## is there a loop bound directly north of the first hole vertex?
-                    northbound = [x[0] for x in loop[0] if x[0] > vertexes[0][0] and x[1] == vertexes[0][1]]
-                    #print(AR['label'], northbound)
-                    if len(northbound) == 0:
-                        continue
-                    ## directly south?
-                    southbound = [x[0] for x in loop[0] if x[0] < vertexes[0][0] and x[1] == vertexes[0][1]]
-                    #print(AR['label'], southbound)
-                    if len(southbound) == 0:
-                        continue
-                    brackets.append([i,j,min(northbound) - max(southbound)])
+    # # get distinct labels
+    # labels = numpy.unique(holes)
+    # h = []
+    # # identify blobs
+    # for label in labels:
+    #     if label == 0:
+    #         continue
+    #     else:
+    #         vertexes = trace_shape(holes, label)
+    #         placedhole = False
+    #         brackets = []
+    #         #print(label)
+    #         # identify which AR this hole belongs to
+    #         for i, AR in enumerate(ARs):
+    #             for j, loop in enumerate(AR['coordinates']):
+    #                 # identify which loop in this AR the hole might belong to
+    #                 ## is there a loop bound directly north of the first hole vertex?
+    #                 northbound = [x[0] for x in loop[0] if x[0] > vertexes[0][0] and x[1] == vertexes[0][1]]
+    #                 #print(AR['label'], northbound)
+    #                 if len(northbound) == 0:
+    #                     continue
+    #                 ## directly south?
+    #                 southbound = [x[0] for x in loop[0] if x[0] < vertexes[0][0] and x[1] == vertexes[0][1]]
+    #                 #print(AR['label'], southbound)
+    #                 if len(southbound) == 0:
+    #                     continue
+    #                 brackets.append([i,j,min(northbound) - max(southbound)])
                     
-            brackets.sort(key=lambda x: x[2])
-            ARs[brackets[0][0]]['coordinates'][brackets[0][1]].append(vertexes)
-            ARs[brackets[0][0]]['flags'].add('holes')
-            placedhole = True
+    #         brackets.sort(key=lambda x: x[2])
+    #         ARs[brackets[0][0]]['coordinates'][brackets[0][1]].append(vertexes)
+    #         ARs[brackets[0][0]]['flags'].add('holes')
+    #         placedhole = True
 
-            if not placedhole:
-                print(f'warning: didnt place hole in timestamp {timestep}, hole label {label}, scanning on vertex {vertexes[0]}')
-                print([index2coords(index, longitudes, latitudes) for index in vertexes])
+    #         if not placedhole:
+    #             print(f'warning: didnt place hole in timestamp {timestep}, hole label {label}, scanning on vertex {vertexes[0]}')
+    #             print([index2coords(index, longitudes, latitudes) for index in vertexes])
 
     # straight runs need only the first and last point
     for i, AR in enumerate(ARs):
@@ -334,12 +387,12 @@ for timestep in [795]:
                 'geolocation': {"type": "MultiPolygon", "coordinates": [[[index2coords(index, longitudes, latitudes) for index in poly] for poly in loop] for loop in AR['coordinates']]}
             } for AR in ARs]
 
-    # map to [0,360]
-    for i, AR in enumerate(ARs):
-        for j, loop in enumerate(AR['geolocation']['coordinates']):
-            for k, poly in enumerate(loop):
-                for v, vertex in enumerate(poly):
-                    if vertex[0] < 0:
-                        ARs[i]['geolocation']['coordinates'][j][k][v][0] += 360
+    # # map to [0,360]
+    # for i, AR in enumerate(ARs):
+    #     for j, loop in enumerate(AR['geolocation']['coordinates']):
+    #         for k, poly in enumerate(loop):
+    #             for v, vertex in enumerate(poly):
+    #                 if vertex[0] < 0:
+    #                     ARs[i]['geolocation']['coordinates'][j][k][v][0] += 360
 
     db.blobs.insert_many(ARs)
