@@ -168,6 +168,12 @@ def convert_hour(time):
 
     return "%d:%02d.%02d" % (hh, mm, ss)
 
+def add_noise(mp):
+    # take a multipolygon and add a tiny amount of noise to each vertex
+    # to try and dodge https://jira.mongodb.org/browse/SERVER-52928
+
+    
+
 # unpack the netcdf
 longitudes = xar['longitude'].to_dict()['data']
 latitudes = xar['latitude'].to_dict()['data']
