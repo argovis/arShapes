@@ -169,8 +169,9 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
-def generate_geojson(labeled_map, label, connected_poles=True, periodic_dateline=True):
+def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
+    # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
     # return a valid geojson MultiPolygon representing the labeled feature.
     # <connected_poles> and <periodic_dateline> should be the same as used when creating <labeled_map>
 
@@ -244,8 +245,27 @@ def generate_geojson(labeled_map, label, connected_poles=True, periodic_dateline
                 loops[j].append(vertexes)
                 flags.add('holes')
 
-    return loops, flags
+    # straight runs need only the first and last point
+    for j, loop in enumerate(loops):
+        for k, poly in enumerate(loop):
+            reduced_poly = [poly[0]]
+            for v in range(1,len(poly)-1):
+                if poly[v][0] == reduced_poly[-1][0] and poly[v][0] == poly[v+1][0]:
+                    continue
+                elif poly[v][1] == reduced_poly[-1][1] and poly[v][1] == poly[v+1][1]:
+                    continue
+                else:
+                    reduced_poly.append(poly[v])
+            reduced_poly.append(poly[-1])
+            # a polygon that loops the entire planet in a straight line will at this point be reduced to just the 'starting' point,
+            # need to reinject another point from the line to make valid geojson
+            if len(reduced_poly) == 2:
+                reduced_poly.insert(1, poly[math.floor(len(poly)/2)])
+                reduced_poly.insert(2, poly[math.floor(len(poly)/2)+1])
+            loops[j][k] = reduced_poly
 
+    # map indexes back onto real locations and return the geojson
+    return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}
 
 
 
