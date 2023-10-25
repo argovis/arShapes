@@ -1,4 +1,4 @@
-import scipy, numpy
+import scipy, numpy, copy
 
 def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_poles=True, periodic_dateline=True):
     # given a 2D numpy array feature_map[latitude][longitude] labeling features with 1 and voids with 0,
@@ -241,7 +241,7 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
             if h == 0:
                 continue
             else:
-                vertexes = gridtools.trace_shape(holes, h)[0]
+                vertexes = trace_shape(holes, h)[0]
                 loops[j].append(vertexes)
                 flags.add('holes')
 
@@ -265,7 +265,7 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
             loops[j][k] = reduced_poly
 
     # map indexes back onto real locations and return the geojson
-    return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}
+    return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}, flags
 
 
 
