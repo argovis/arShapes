@@ -3,7 +3,7 @@
 import xarray, numpy, scipy, sys, datetime, copy, random, math
 from pymongo import MongoClient
 from collections import defaultdict
-import gridtools
+import argovisHelpers as avh
 from functools import partial
 from geopy import distance
 
@@ -127,7 +127,7 @@ for timestep in range(len(cal_years)):
     ivt = ivts[timestep].to_numpy()
 
     # label the ARs and make periodic on longitude boundary
-    labeled_map = gridtools.label_features(ar)
+    labeled_map = avh.gridtools.label_features(ar)
     labels = numpy.unique(labeled_map)
     for label in labels:
     #for label in [1]:
@@ -143,7 +143,7 @@ for timestep in range(len(cal_years)):
             vapors = [ [ivt[cells[0][i]][cells[1][i]]] for i in range(len(cells[0])) ]
             raster = list(zip(lons, lats, vapors))
 
-            geo, flags = gridtools.generate_geojson(labeled_map, label, partial(index2coords, longitudes, latitudes), reverse_winding=True)
+            geo, flags = avh.gridtools.generate_geojson(labeled_map, label, partial(index2coords, longitudes, latitudes), reverse_winding=True)
             flags = list(flags)
             flags = ['south_pole' if x=='first_pole' else x for x in flags]
             flags = ['north_pole' if x=='last_pole' else x for x in flags]

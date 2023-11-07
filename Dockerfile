@@ -1,4 +1,4 @@
-FROM python:3.11
+FROM python:3.9
 
 RUN apt-get update -y ; apt-get install -y nano netcdf-bin
-RUN pip install xarray netcdf4 numpy scipy pymongo shapely geopy
+RUN pip install xarray netcdf4 numpy scipy pymongo shapely geopy argovisHelpers
