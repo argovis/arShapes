@@ -1,16 +1,30 @@
-import scipy, numpy, copy
+import scipy, numpy, copy, math
 
 def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_poles=True, periodic_dateline=True):
     # given a 2D numpy array feature_map[latitude][longitude] labeling features with 1 and voids with 0,
     # label distinct isolated features. 
     # periodic_dateline = True makes a periodic boundary on the inner index
     # connected_poles = True makes all features touching a pole connected
+
     labeled_map = scipy.ndimage.label(feature_map, structure=structure)[0]
+
     # periodic boundary
     if periodic_dateline:
-        for y in range(labeled_map.shape[0]):
-            if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
-                labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+        if structure == [[0,1,0],[1,1,1],[0,1,0]]:
+            # no diag
+            for y in range(labeled_map.shape[0]):
+                if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
+                    labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+        elif structure == [[1,1,1],[1,1,1],[1,1,1]]:
+            # diagonally connected
+            for y in range(labeled_map.shape[0]):
+                if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
+                    labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+                elif labeled_map[y, 0] > 0 and labeled_map[max(y-1,0), -1]  > 0:
+                    labeled_map[labeled_map == labeled_map[max(y-1,0), -1]] = labeled_map[y, 0]
+                elif labeled_map[y, 0] > 0 and labeled_map[min(y+1,labeled_map.shape[0]-1), -1]  > 0:
+                    labeled_map[labeled_map == labeled_map[min(y+1,labeled_map.shape[0]-1), -1]] = labeled_map[y, 0]
+          
     # connected poles
     if connected_poles:
         spole_features = [x for x in numpy.unique(labeled_map[0]) if x > 0]
@@ -24,15 +38,21 @@ def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_p
 
     return labeled_map
 
-def trace_shape(labeled_map, label, nlatsteps=361):
-    # trace the shape labeled with <label> in the map returned by label_features
+def trace_shape(labeled_map, label, winding='CCW'):
+    # trace the shape labeled with <label> in the map returned by label_features, in the direction indicated by winding, either CW or CCW
+    # note this function assumes a labeled_map without diagonal connections, behavior with diagonal connections is undefined
 
     nlon = len(labeled_map[0])
+    nlat = len(labeled_map)
 
     # find a top edge, and take its two top vertexes as the first two boundary vertexes, in order
     cells = numpy.where(labeled_map == label)
-    vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
-    facing = 'R'
+    if winding == 'CW':
+        vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
+        facing = 'R'
+    else:
+        vertexes = [[cells[0][0],(cells[1][0]+1) % nlon], [cells[0][0],cells[1][0]]]
+        facing = 'L'
     while not numpy.array_equal(vertexes[0], vertexes[-1]):
         # determine which pattern we're in as a function of present vertex and direction
         # make the appropriate move to generate nextvertex, and append it to vertexes
@@ -51,7 +71,7 @@ def trace_shape(labeled_map, label, nlatsteps=361):
             facing, delta_iLat, delta_iLon = choose_move(label, labeled_map, n_vertexes[-1][0], n_vertexes[-1][1], facing)
             n_vertexes.append([n_vertexes[-1][0]+delta_iLat, (n_vertexes[-1][1]+delta_iLon)%nlon])
         # decide who is the blob and who is the hole
-        n_vertexes_north = len([x for x in n_vertexes if x[0] > nlatsteps/2])
+        n_vertexes_north = len([x for x in n_vertexes if x[0] > nlat/2])
         if n_vertexes_north / len(n_vertexes):
             # most points are in the northern hemisphere, n_vertexes is the hole
             return [vertexes, n_vertexes]
@@ -169,16 +189,17 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
-def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True):
+def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, enforce_CCW=True, reverse_winding=False):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
     # return a valid geojson MultiPolygon representing the labeled feature.
     # <connected_poles> and <periodic_dateline> should be the same as used when creating <labeled_map>
+    # reverse_winding=True reverses the winding set by trace_shape; use this if an axis is flipped, ie sothern latitudes are at lower indexes, at the 'top' of the grid.
 
     flags = set(())
     local_map = copy.deepcopy(labeled_map)
     local_map[labeled_map != label] = 0 # gets rid of other ARs in a the AR binary flag map
-    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=True, periodic_dateline=True)
+    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=False, periodic_dateline=periodic_dateline) # don't connect the poles here, want to trace_shape on non-diagonally connected subregions
     local_sublabels = [x for x in numpy.unique(local_sublabels_map) if x != 0] # these are the rings that belong as top level objects in this blob
 
     # get the outer loops
@@ -241,34 +262,35 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
             if h == 0:
                 continue
             else:
-                vertexes = trace_shape(holes, h)[0]
+                vertexes = trace_shape(holes, h, winding='CW')[0]
                 loops[j].append(vertexes)
                 flags.add('holes')
 
-    # straight runs need only the first and last point
-    for j, loop in enumerate(loops):
-        for k, poly in enumerate(loop):
-            reduced_poly = [poly[0]]
-            for v in range(1,len(poly)-1):
-                if poly[v][0] == reduced_poly[-1][0] and poly[v][0] == poly[v+1][0]:
-                    continue
-                elif poly[v][1] == reduced_poly[-1][1] and poly[v][1] == poly[v+1][1]:
-                    continue
-                else:
-                    reduced_poly.append(poly[v])
-            reduced_poly.append(poly[-1])
-            # a polygon that loops the entire planet in a straight line will at this point be reduced to just the 'starting' point,
-            # need to reinject another point from the line to make valid geojson
-            if len(reduced_poly) == 2:
-                reduced_poly.insert(1, poly[math.floor(len(poly)/2)])
-                reduced_poly.insert(2, poly[math.floor(len(poly)/2)+1])
-            loops[j][k] = reduced_poly
+    # # straight runs need only the first and last point
+    # for j, loop in enumerate(loops):
+    #     for k, poly in enumerate(loop):
+    #         reduced_poly = [poly[0]]
+    #         for v in range(1,len(poly)-1):
+    #             if poly[v][0] == reduced_poly[-1][0] and poly[v][0] == poly[v+1][0]:
+    #                 continue
+    #             elif poly[v][1] == reduced_poly[-1][1] and poly[v][1] == poly[v+1][1]:
+    #                 continue
+    #             else:
+    #                 reduced_poly.append(poly[v])
+    #         reduced_poly.append(poly[-1])
+    #         # a polygon that loops the entire planet in a straight line will at this point be reduced to just the 'starting' point,
+    #         # need to reinject another point from the line to make valid geojson
+    #         if len(reduced_poly) == 2:
+    #             reduced_poly.insert(1, poly[math.floor(len(poly)/2)])
+    #             reduced_poly.insert(2, poly[math.floor(len(poly)/2)+1])
+    #         loops[j][k] = reduced_poly
 
-    # map indexes back onto real locations and return the geojson
-    return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}, flags
+    # map indexes back onto real locations
+    coords = [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]
 
+    if reverse_winding:
+        for i, blob in enumerate(coords):
+            for j, loop in enumerate(blob):
+                coords[i][j].reverse()
 
-
-
-
-
+    return {"type": "MultiPolygon", "coordinates": coords}, flags
