@@ -1,0 +1,1 @@
+After initially populating the ARs, we decided to rethink the `raster` parameter into a more conventional `data` parameter. This folder contains the munging scripts and tools; it should probably be folded into the main routine if ever the ARs need to be recreated from scratch.

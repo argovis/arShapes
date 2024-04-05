@@ -1,0 +1,7 @@
+FROM python:3.9
+RUN pip install pymongo
+
+WORKDIR /app
+COPY roundtrip.py roundtrip.py
+RUN chown -R 1000660000 /app
+CMD ['python', 'roundtrip.py']
