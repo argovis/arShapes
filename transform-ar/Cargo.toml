@@ -11,3 +11,4 @@ tokio = "1"
 tokio-stream = "0.1.13"
 serde = { version = "1.0", features = ["derive"] }
 chrono = "0.4"
+serde_json = "1.0" 

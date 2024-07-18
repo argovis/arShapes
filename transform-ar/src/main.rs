@@ -2,9 +2,8 @@ use mongodb::{bson::doc, Client, options::{FindOptions, ClientOptions, ResolverC
 use std::env;
 use tokio_stream::StreamExt;
 use serde::{Deserialize, Serialize};
-use chrono::Utc;
-use mongodb::bson::{Bson, DateTime};
-use chrono::prelude::*;
+use mongodb::bson::{Bson, DateTime, to_bson};
+use serde_json::json;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -17,6 +16,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         polygon_coordinates: Vec<Vec<Vec<Vec<f64>>>>,
     }
 
+    impl From<GeoJSONPolygon> for Bson {
+        fn from(polygon: GeoJSONPolygon) -> Self {
+            let geojson = json!({
+                "type": &polygon.polygon_type,
+                "coordinates": &polygon.polygon_coordinates
+            });
+            let bson = to_bson(&geojson).unwrap();
+            match bson {
+                Bson::Document(document) => Bson::Document(document),
+                _ => panic!("Failed to convert GeoJSONPolygon to Bson::Document"),
+            }
+        }
+    }
+
     #[derive(Serialize, Deserialize, Debug, Clone)]
     struct DataSchema {
         _id: String,
@@ -25,6 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         raster: Option<Vec<(f64, f64, Vec<f64>)>>,
         flags: Vec<String>,
         geolocation: GeoJSONPolygon,
+        true_geolocation: Option<GeoJSONPolygon>,
         metadata: Vec<String>,
     }
 
@@ -67,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .filter_map(|(_, _, ivt)| ivt.first().cloned())
                         .collect();                    
 
-                    let mut new_document = doc! {
+                    let new_document = doc! {
                         "data": [longitudes, latitudes, ivt_first_elements],
                         "geolocation": {
                             "type": &document.geolocation.polygon_type,
@@ -77,7 +91,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "basins": document.basins.clone(),
                         "flags": document.flags.clone(),
                         "metadata": document.metadata.clone(),
-                        "timestamp": document.timestamp.clone()
+                        "timestamp": document.timestamp.clone(),
+                        "true_geolocation": document.true_geolocation.clone()
                     };
 
                     // Insert the new document into a new collection

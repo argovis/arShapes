@@ -9,7 +9,7 @@ spec:
   - name: ar-munge-roundtrip
     imagePullPolicy: Always
     image: argovis/ar-sync:munge-roundtrip
-    command: ['python', 'roundtrip.py']
+    command: ['python', '-u', 'roundtrip.py']
     resources:
       requests:
         memory: "0Gi"
