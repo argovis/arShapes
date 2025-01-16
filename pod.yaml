@@ -13,8 +13,8 @@ spec:
   - name: schema
     imagePullPolicy: Always
     image: argovis/ar-sync:dev
-    #command: ['sleep', '1000000']
-    command: ['bash', 'loaddata.sh']
+    command: ['sleep', '1000000']
+    #command: ['bash', 'loaddata.sh']
     volumeMounts:
       - mountPath: "/tmp"
         name: ar
