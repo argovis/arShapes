@@ -1,9 +1,11 @@
 # given one of the upstream files, output a netcdf file for a single timestep with AR mask on [min_lat, max_lat, min_lon, max_lon].
-import xarray, numpy
+# usage: python maskmaker.py data/Rutz_ARCatalog_MERRA2_2022.nc
+import xarray, numpy, sys, os
 
-ds = xarray.open_dataset("data/Rutz_ARCatalog_MERRA2_2022.nc")
+ds = xarray.open_dataset(sys.argv[1])
 lat_min, lat_max = 20, 50
 lon_min, lon_max = -180, -110
+path, _ = os.path.split(sys.argv[1])
 
 lat_vals = ds['latitude'].values
 lon_vals = ds['longitude'].values
@@ -23,5 +25,5 @@ for i in range(ds.dims['ntim']):
         nlon=lon_inds
     )
 
-    out_filename = f"AR_timestep_{timestamp_str}.nc"
+    out_filename = os.path.join(path, f"AR_timestep_{timestamp_str}.nc")
     timestep_slice.to_netcdf(out_filename)
